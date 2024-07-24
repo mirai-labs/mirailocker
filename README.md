@@ -11,4 +11,4 @@ A typical MiraiLocker lifecycle looks like this:
 3. The creators uses the the master key to lock the locker, set a claim expiration deadline, and issue a claim key.
 4. The creator sends the claim key to the claimer – this can either be a direct or transfer, or something more complex like an auction.
 5. The claimer can claim the items in the locker before the claim expiration deadline.
-6. Once a locker is empty, it can be destroyed by anyone.
+6. After the claim expiration deadline, the creator can use the master key to claim any unclaimed items and destroy the locker.
