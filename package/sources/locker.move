@@ -131,21 +131,18 @@ module mirailocker::locker {
     }
 
     /// Lock a locker, and optionally specify a claim deadline for the items inside.
-    /// Note that `claim_deadline` is an Option<u64>. If a null value is provided,
-    /// the locker would have no claim deadline, which would make it impossible
-    /// for the master key holder to reclaim any items which have not been claimed.
     /// This function also issues a key, which can be used to claim items from the locker.
     public fun lock(
         mkey: &MasterKey,
         locker: &mut Locker,
-        claim_deadline: Option<u64>,
+        claim_deadline: u64,
         clock: &Clock,
         ctx: &mut TxContext,
     ): Key {
         assert_valid_master_key(mkey, locker);
-        assert!(*claim_deadline.borrow() > clock.timestamp_ms(), 2);
+        assert!(claim_deadline > clock.timestamp_ms(), 2);
 
-        locker.claim_deadline = claim_deadline;
+        locker.claim_deadline.fill(claim_deadline);
 
         let key = key::new(locker.id.to_inner(), ctx);
         locker.key_id.fill(key.id());
@@ -154,7 +151,7 @@ module mirailocker::locker {
             LockerLockedEvent {
                 locker_id: locker.id.to_inner(),
                 key_id: key.id(),
-                claim_deadline: *claim_deadline.borrow(),
+                claim_deadline: claim_deadline,
             }
         );
 
