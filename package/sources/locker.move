@@ -76,6 +76,7 @@ module mirailocker::locker {
     const EClaimPeriodNotExpired: u64 = 4;
     const EKeyAlreadyIssued: u64 = 5;
     const EMaxItemCountReached: u64 = 6;
+    const EKeyNotIssued: u64 = 7;
 
     fun init(
         otw: LOCKER,
@@ -129,19 +130,22 @@ module mirailocker::locker {
         (locker, mkey)
     }
 
-    /// Lock a locker, and specify a claim deadline for the items inside.
+    /// Lock a locker, and optionally specify a claim deadline for the items inside.
+    /// Note that `claim_deadline` is an Option<u64>. If a null value is provided,
+    /// the locker would have no claim deadline, which would make it impossible
+    /// for the master key holder to reclaim any items which have not been claimed.
     /// This function also issues a key, which can be used to claim items from the locker.
     public fun lock(
         mkey: &MasterKey,
         locker: &mut Locker,
-        claim_deadline: u64,
+        claim_deadline: Option<u64>,
         clock: &Clock,
         ctx: &mut TxContext,
     ): Key {
         assert_valid_master_key(mkey, locker);
-        assert!(claim_deadline > clock.timestamp_ms(), 2);
+        assert!(*claim_deadline.borrow() > clock.timestamp_ms(), 2);
 
-        locker.claim_deadline.fill(claim_deadline);
+        locker.claim_deadline = claim_deadline;
 
         let key = key::new(locker.id.to_inner(), ctx);
         locker.key_id.fill(key.id());
@@ -150,7 +154,7 @@ module mirailocker::locker {
             LockerLockedEvent {
                 locker_id: locker.id.to_inner(),
                 key_id: key.id(),
-                claim_deadline: claim_deadline,
+                claim_deadline: *claim_deadline.borrow(),
             }
         );
 
@@ -237,7 +241,7 @@ module mirailocker::locker {
         transfer::public_receive(&mut locker.id, item_to_receive)
     }
 
-    public fun extend_claim_deadline(
+    public fun set_claim_deadline(
         mkey: &MasterKey,
         locker: &mut Locker,
         claim_deadline: u64,
@@ -248,7 +252,6 @@ module mirailocker::locker {
     }
 
     public fun destroy_empty(
-        mkey: MasterKey,
         locker: Locker,
         clock: &Clock,
     ) {
@@ -272,8 +275,6 @@ module mirailocker::locker {
 
         items.destroy_empty();
         id.delete();
-
-        mkey.drop();
     }
 
     fun id(
@@ -286,6 +287,9 @@ module mirailocker::locker {
         locker: &Locker,
         clock: &Clock,
     ) {
+        // Assert the claim key has been issued. If not, it means the claim period
+        // has not started yet, which also means it can't expire.
+        assert!(locker.key_id.is_some(), EKeyNotIssued);
         if (locker.claim_deadline.is_some()) {
             assert!(*locker.claim_deadline.borrow() > clock.timestamp_ms(), EClaimPeriodExpired);
         };
@@ -295,6 +299,9 @@ module mirailocker::locker {
         locker: &Locker,
         clock: &Clock,
     ) {
+        // Assert the claim key has been issued. If not, it means the claim period
+        // has not started yet, which also means it can't expire.
+        assert!(locker.key_id.is_some(), EKeyNotIssued);
         if (locker.claim_deadline.is_some()) {
             assert!(clock.timestamp_ms() > *locker.claim_deadline.borrow(), EClaimPeriodNotExpired);
         };
