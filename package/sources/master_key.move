@@ -1,27 +1,27 @@
 // Copyright (c) Studio Mirai, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-module mirailocker::key {
+module mirailocker::master_key {
 
     use sui::display::{Self};
     use sui::package;
 
-    public struct KEY has drop {}
+    public struct MASTER_KEY has drop {}
 
-    public struct Key has key, store {
+    public struct MasterKey has key, store {
         id: UID,
         locker_id: ID,
     }
 
     fun init(
-        otw: KEY,
+        otw: MASTER_KEY,
         ctx: &mut TxContext,
     ) {
         let publisher = package::claim(otw, ctx);
 
-        let mut display = display::new<Key>(&publisher, ctx);
-        display.add(b"name".to_string(), b"MiraiLocker Key #{number}".to_string());
-        display.add(b"description".to_string(), b"A key to unlock MiraiLocker #{number}.".to_string());
+        let mut display = display::new<MasterKey>(&publisher, ctx);
+        display.add(b"name".to_string(), b"MiraiLocker Master Key #{number}".to_string());
+        display.add(b"description".to_string(), b"A master key for MiraiLocker #{number}.".to_string());
         display.add(b"number".to_string(), b"{number}".to_string());
         display.add(b"image_url".to_string(), b"https://img.sm.xyz/{id}.webp".to_string());
         display.add(b"locker_id".to_string(), b"{locker_id}".to_string());
@@ -31,12 +31,12 @@ module mirailocker::key {
     }
 
     public fun drop(
-        key: Key,
+        mkey: MasterKey,
     ) {
-        let Key {
+        let MasterKey {
             id,
             locker_id: _,
-        } = key;
+        } = mkey;
 
         id.delete()
     }
@@ -44,24 +44,24 @@ module mirailocker::key {
     public(package) fun new(
         locker_id: ID,
         ctx: &mut TxContext,
-    ): Key {
-        let key = Key {
+    ): MasterKey {
+        let mkey = MasterKey {
             id: object::new(ctx),
             locker_id: locker_id,
         };
 
-        key
+        mkey
     }
 
     public(package) fun id(
-        key: &Key,
+        mkey: &MasterKey,
     ): ID {
-        object::id(key)
+        object::id(mkey)
     }
 
     public(package) fun locker_id(
-        key: &Key,
+        mkey: &MasterKey,
     ): ID {
-        key.locker_id
+        mkey.locker_id
     }
 }
