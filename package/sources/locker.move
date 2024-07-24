@@ -17,16 +17,21 @@ module mirailocker::locker {
 
     public struct LOCKER has drop {}
 
-    public struct Locker has key {
+    public struct Locker has key, store {
         id: UID,
         claim_deadline: Option<u64>,
-        created_at: u64,
         creator: address,
         item_count: u8,
         items: VecMap<ID, TypeName>,
         key_id: Option<ID>,
+        number: u64,
     }
 
+    public struct LockerCounter has key {
+        id: UID,
+        count: u64,
+    }
+    
     public struct LockerCreatedEvent has copy, drop {
         locker_id: ID,
         master_key_id: ID,
@@ -69,6 +74,8 @@ module mirailocker::locker {
     const EInvalidMasterKeyForLocker: u64 = 2;
     const EClaimPeriodExpired: u64 = 3;
     const EClaimPeriodNotExpired: u64 = 4;
+    const EKeyAlreadyIssued: u64 = 5;
+    const EMaxItemCountReached: u64 = 6;
 
     fun init(
         otw: LOCKER,
@@ -82,24 +89,32 @@ module mirailocker::locker {
         display.add(b"number".to_string(), b"{number}".to_string());
         display.add(b"image_url".to_string(), b"https://img.sm.xyz/{id}.webp".to_string());
 
+        let counter = LockerCounter {
+            id: object::new(ctx),
+            count: 0,
+        };
+
         transfer::public_transfer(display, ctx.sender());
         transfer::public_transfer(publisher, ctx.sender());
+        transfer::share_object(counter);
     }
 
     /// Create a new locker and issue a master key which can be used to
     /// place items into the locker.
     public fun new(
-        clock: &Clock,
+        counter: &mut LockerCounter,
         ctx: &mut TxContext,
-    ): MasterKey {
+    ): (Locker, MasterKey) {
+        counter.count = counter.count + 1;
+
         let locker = Locker {
             id: object::new(ctx),
             claim_deadline: option::none(),
-            created_at: clock.timestamp_ms(),
             creator: ctx.sender(),
             key_id: option::none(),
             item_count: 0,
             items: vec_map::empty(),
+            number: counter.count ,
         };
 
         let mkey = master_key::new(locker.id(), ctx);
@@ -111,9 +126,7 @@ module mirailocker::locker {
             }
         );
 
-        transfer::share_object(locker);
-
-        mkey
+        (locker, mkey)
     }
 
     /// Lock a locker, and specify a claim deadline for the items inside.
@@ -122,13 +135,16 @@ module mirailocker::locker {
         mkey: &MasterKey,
         locker: &mut Locker,
         claim_deadline: u64,
+        clock: &Clock,
         ctx: &mut TxContext,
     ): Key {
         assert_valid_master_key(mkey, locker);
+        assert!(claim_deadline > clock.timestamp_ms(), 2);
 
         locker.claim_deadline.fill(claim_deadline);
 
         let key = key::new(locker.id.to_inner(), ctx);
+        locker.key_id.fill(key.id());
 
         event::emit(
             LockerLockedEvent {
@@ -149,8 +165,10 @@ module mirailocker::locker {
     ) {
         assert_valid_master_key(mkey, locker);
 
-        assert!(locker.item_count < MAX_ITEM_COUNT, 1);
-        assert!(type_name::get<T>() != type_name::get<Key>(), 1);
+        // Assert the locker key is none, which means the key hasn't been created.
+        // This check is necessary to ensure items are not added after a key has been created.
+        assert!(locker.key_id.is_none(), EKeyAlreadyIssued);
+        assert!(locker.item_count < MAX_ITEM_COUNT, EMaxItemCountReached);
 
         event::emit(
             LockedItemAddedEvent {
@@ -162,7 +180,8 @@ module mirailocker::locker {
         );
 
         locker.items.insert(object::id(&item), type_name::get<T>());
-        locker.item_count = locker.item_count + 1;
+        locker.item_count = locker.items.size() as u8;
+
         transfer::public_transfer(item, locker.id.to_address());
     }
 
@@ -175,10 +194,10 @@ module mirailocker::locker {
         clock: &Clock,
     ): T {
         assert_valid_master_key(mkey, locker);
-        assert_claim_period_not_expired(locker, clock);
+        assert_claim_period_expired(locker, clock);
         
         locker.items.remove(&item_to_receive.receiving_object_id());
-        locker.item_count = locker.item_count - 1;
+        locker.item_count = locker.items.size() as u8;
 
         event::emit(
             LockedItemRemovedEvent {
@@ -204,7 +223,7 @@ module mirailocker::locker {
         assert_claim_period_not_expired(locker, clock);
         
         locker.items.remove(&item_to_receive.receiving_object_id());
-        locker.item_count = locker.item_count - 1;
+        locker.item_count = locker.items.size() as u8;
 
         event::emit(
             LockedItemClaimedEvent {
@@ -218,7 +237,18 @@ module mirailocker::locker {
         transfer::public_receive(&mut locker.id, item_to_receive)
     }
 
+    public fun extend_claim_deadline(
+        mkey: &MasterKey,
+        locker: &mut Locker,
+        claim_deadline: u64,
+    ) {
+        assert_valid_master_key(mkey, locker);
+        assert!(claim_deadline > *locker.claim_deadline.borrow(), 2);
+        locker.claim_deadline.swap(claim_deadline);
+    }
+
     public fun destroy_empty(
+        mkey: MasterKey,
         locker: Locker,
         clock: &Clock,
     ) {
@@ -233,15 +263,17 @@ module mirailocker::locker {
         let Locker {
             id,
             claim_deadline: _,
-            created_at: _,
             creator: _,
             item_count: _,
             items,
             key_id: _,
+            number: _,
         } = locker;
 
         items.destroy_empty();
         id.delete();
+
+        mkey.drop();
     }
 
     fun id(
@@ -279,7 +311,7 @@ module mirailocker::locker {
         mkey: &MasterKey,
         locker: &Locker,
     ) {
-        assert!(mkey.locker_id() == locker.key_id.borrow(), EInvalidMasterKeyForLocker);
+        assert!(mkey.locker_id() == locker.id(), EInvalidMasterKeyForLocker);
     }
 }
 
